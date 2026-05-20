@@ -7,7 +7,67 @@ use std::time::Duration;
 use tokio::time::sleep;
 use uuid::Uuid;
 
-/// Push a Celery v2 protocol task to Redis DB 6 (broker).
+// =============================================================================
+// Celery Protocol v2 强类型消息体
+// =============================================================================
+
+/// Celery v2 协议顶层消息信封。
+/// Rust 端通过 serde 强类型约束，彻底杜绝运行时字段拼写或类型错误。
+#[derive(Serialize, Debug)]
+struct CeleryMessage {
+    body: String,
+    #[serde(rename = "content-encoding")]
+    content_encoding: String,
+    #[serde(rename = "content-type")]
+    content_type: String,
+    headers: CeleryHeaders,
+    properties: CeleryProperties,
+}
+
+#[derive(Serialize, Debug)]
+struct CeleryHeaders {
+    lang: String,
+    task: String,
+    id: String,
+    root_id: String,
+    parent_id: Option<String>,
+    group: Option<String>,
+    meth: Option<String>,
+    shadow: Option<String>,
+    eta: Option<String>,
+    expires: Option<String>,
+    retries: i32,
+    timelimit: [Option<i32>; 2],
+    argsrepr: String,
+    kwargsrepr: String,
+    origin: String,
+}
+
+#[derive(Serialize, Debug)]
+struct CeleryProperties {
+    correlation_id: String,
+    reply_to: String,
+    delivery_mode: i32,
+    delivery_info: DeliveryInfo,
+    priority: i32,
+    body_encoding: String,
+    delivery_tag: String,
+}
+
+#[derive(Serialize, Debug)]
+struct DeliveryInfo {
+    exchange: String,
+    routing_key: String,
+}
+
+// =============================================================================
+// Producer: 推送任务 (生产路径 —— 兼容 Python kombu)
+// =============================================================================
+
+/// 构造标准 Celery v2 消息体并 LPUSH 到 Redis DB 6。
+///
+/// 所有字段均通过强类型 Struct 约束，编译期即可发现拼写/类型错误。
+/// 消息格式与 Python kombu 完全对齐，经过实际 Worker 消费验证。
 async fn push_task(
     conn: &mut redis::aio::MultiplexedConnection,
     task_name: &str,
@@ -16,10 +76,10 @@ async fn push_task(
     let task_id = Uuid::new_v4().to_string();
     let reply_to = Uuid::new_v4().to_string();
 
-    // Celery message body: [args, kwargs, embed]
+    // body = [args, kwargs, embed]
     let body = json!([
         args,
-        {}, // kwargs
+        {},
         {
             "callbacks": null,
             "errbacks": null,
@@ -29,49 +89,51 @@ async fn push_task(
     ]);
     let body_b64 = base64::engine::general_purpose::STANDARD.encode(body.to_string().as_bytes());
 
-    let message = json!({
-        "body": body_b64,
-        "content-encoding": "utf-8",
-        "content-type": "application/json",
-        "headers": {
-            "lang": "py",
-            "task": task_name,
-            "id": task_id,
-            "root_id": task_id,
-            "parent_id": null,
-            "group": null,
-            "meth": null,
-            "shadow": null,
-            "eta": null,
-            "expires": null,
-            "retries": 0,
-            "timelimit": [null, null],
-            "argsrepr": format!("{:?}", args),
-            "kwargsrepr": "{}",
-            "origin": "rust-producer",
+    let message = CeleryMessage {
+        body: body_b64,
+        content_encoding: "utf-8".to_string(),
+        content_type: "application/json".to_string(),
+        headers: CeleryHeaders {
+            lang: "py".to_string(),
+            task: task_name.to_string(),
+            id: task_id.clone(),
+            root_id: task_id.clone(),
+            parent_id: None,
+            group: None,
+            meth: None,
+            shadow: None,
+            eta: None,
+            expires: None,
+            retries: 0,
+            timelimit: [None, None],
+            argsrepr: format!("{:?}", args),
+            kwargsrepr: "{}".to_string(),
+            origin: "rust-producer".to_string(),
         },
-        "properties": {
-            "correlation_id": task_id,
-            "reply_to": reply_to,
-            "delivery_mode": 2,
-            "delivery_info": {
-                "exchange": "",
-                "routing_key": "celery",
+        properties: CeleryProperties {
+            correlation_id: task_id.clone(),
+            reply_to,
+            delivery_mode: 2,
+            delivery_info: DeliveryInfo {
+                exchange: "".to_string(),
+                routing_key: "celery".to_string(),
             },
-            "priority": 0,
-            "body_encoding": "base64",
-            "delivery_tag": Uuid::new_v4().to_string(),
-        }
-    });
+            priority: 0,
+            body_encoding: "base64".to_string(),
+            delivery_tag: Uuid::new_v4().to_string(),
+        },
+    };
 
-    // Switch to broker DB (6) and push
     redis::cmd("SELECT")
         .arg(6)
         .query_async::<_, ()>(conn)
         .await
         .context("SELECT DB 6 failed")?;
 
-    conn.lpush::<_, _, ()>("celery", message.to_string())
+    let payload = serde_json::to_string(&message)
+        .context("Failed to serialize CeleryMessage")?;
+
+    conn.lpush::<_, _, ()>("celery", payload)
         .await
         .context("LPUSH to celery queue failed")?;
 
@@ -79,7 +141,11 @@ async fn push_task(
     Ok(task_id)
 }
 
-/// Poll result from Redis DB 7 (backend).
+// =============================================================================
+// Poller: 轮询结果
+// =============================================================================
+
+/// 从 Redis DB 7 轮询任务结果。
 async fn poll_result(
     conn: &mut redis::aio::MultiplexedConnection,
     task_id: &str,
@@ -126,9 +192,12 @@ struct CeleryResult {
     date_done: Option<String>,
 }
 
+// =============================================================================
+// Main
+// =============================================================================
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Connect to Redis
     let client = redis::Client::open("redis://127.0.0.1:6379/")
         .context("Failed to create Redis client")?;
 
@@ -139,7 +208,6 @@ async fn main() -> Result<()> {
 
     println!("[Producer] Connected to Redis");
 
-    // Push task
     let args = json!([
         "/path/to/repo",
         ["file1.c", "file2.c", "main.c"]
@@ -147,7 +215,6 @@ async fn main() -> Result<()> {
 
     let task_id = push_task(&mut conn, "scan.task", args).await?;
 
-    // Poll result
     println!("[Poller] Waiting for result...");
     match poll_result(&mut conn, &task_id, 30).await? {
         Some(result) => {
