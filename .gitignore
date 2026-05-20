@@ -1,6 +1,6 @@
 # Rust
-rust-producer/target/
-rust-producer/Cargo.lock
+**/target/
+**/Cargo.lock
 
 # Python
 python-worker/.venv/
