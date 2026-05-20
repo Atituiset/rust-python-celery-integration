@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>千万级代码库异步扫描架构分析报告</title>
+  <style>
+    :root {
+      /* 报告基础配色 */
+      --text-main: #1e293b;
+      --text-muted: #64748b;
+      --bg-page: #f1f5f9;
+      --bg-card: #ffffff;
+      --primary: #2563eb;
+      --border-color: #e2e8f0;
+      
+      /* 架构图节点配色 */
+      --grid: #e2e8f0;
+      --rust-bg: #fff7ed; --rust-border: #f97316; --rust-text: #c2410c;
+      --python-bg: #fefce8; --python-border: #eab308; --python-text: #a16207;
+      --redis-bg: #fef2f2; --redis-border: #ef4444; --redis-text: #b91c1c;
+      --flow-in: #3b82f6;   --flow-out: #10b981;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg-page);
+      font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      color: var(--text-main);
+      line-height: 1.6;
+      padding: 40px 20px;
+    }
+
+    .report-container {
+      max-width: 1000px;
+      margin: 0 auto;
+      background: var(--bg-card);
+      border-radius: 16px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.08);
+      padding: 40px 50px;
+    }
+
+    header { border-bottom: 2px solid var(--primary); padding-bottom: 20px; margin-bottom: 30px; }
+    h1 { font-size: 28px; color: #0f172a; margin-bottom: 10px; }
+    .meta-info { font-size: 14px; color: var(--text-muted); }
+
+    h2 { font-size: 20px; color: #0f172a; margin: 30px 0 15px; display: flex; align-items: center; }
+    h2::before { content: ""; display: inline-block; width: 4px; height: 18px; background: var(--primary); margin-right: 10px; border-radius: 2px; }
+    h3 { font-size: 16px; margin: 20px 0 10px; color: #334155; }
+    p { margin-bottom: 16px; }
+    ul { margin-bottom: 16px; padding-left: 20px; }
+    li { margin-bottom: 8px; }
+
+    /* 架构图容器样式 */
+    .diagram-wrapper {
+      width: 100%;
+      overflow-x: auto;
+      padding: 20px 0;
+      margin: 30px 0;
+      display: flex;
+      justify-content: center;
+    }
+
+    .canvas {
+      position: relative;
+      width: 960px; height: 520px;
+      background: white;
+      border-radius: 16px;
+      border: 1px solid var(--border-color);
+      box-shadow: inset 0 0 20px rgba(0,0,0,0.02);
+      flex-shrink: 0;
+    }
+
+    /* 网格背景 */
+    .canvas::before {
+      content: ''; position: absolute; inset: 0;
+      background-image: 
+        linear-gradient(var(--grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+      background-size: 40px 40px;
+      opacity: 0.4; pointer-events: none;
+    }
+
+    /* 节点样式 */
+    .node {
+      position: absolute;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      text-align: center; padding: 14px;
+      border-radius: 12px; z-index: 10;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.05);
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+    .node:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(0,0,0,0.1); }
+    .node-title { font-size: 15px; font-weight: 700; line-height: 1.3; }
+    .node-sub { font-size: 12px; opacity: 0.8; margin-top: 4px; }
+
+    /* 节点定位 */
+    #node-rust  { top: 220px; left: 100px; width: 160px; height: 80px; background: var(--rust-bg); border: 2px solid var(--rust-border); color: var(--rust-text); }
+    #node-python { top: 220px; left: 700px; width: 160px; height: 80px; background: var(--python-bg); border: 2px solid var(--python-border); color: var(--python-text); }
+    #node-redis  { top: 80px; left: 400px; width: 180px; height: 360px; background: var(--redis-bg); border: 2px solid var(--redis-border); color: var(--redis-text); padding: 12px; }
+
+    .redis-header {
+      text-align: center; font-weight: 800; font-size: 14px;
+      border-bottom: 2px dashed #fca5a5; padding-bottom: 8px; margin-bottom: 10px;
+    }
+    .redis-block {
+      background: white; border-radius: 8px; padding: 10px; margin-bottom: 8px;
+      box-shadow: inset 0 1px 3px rgba(0,0,0,0.04);
+    }
+    .block-label { font-size: 10px; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 6px; }
+    
+    /* 队列动画效果 */
+    .q-bar { height: 6px; background: var(--flow-in); margin-bottom: 3px; border-radius: 3px; }
+    .q-bar:nth-child(2) { animation: pulse 1.5s infinite; }
+    .q-bar:last-child { margin-bottom: 0; opacity: 0.25; }
+    @keyframes pulse { 0% { opacity: 0.5; width: 80%; } 50% { opacity: 1; width: 100%; } 100% { opacity: 0.5; width: 80%; } }
+
+    .result-card {
+      background: #ecfdf5; border: 1px solid #86efac; border-radius: 6px;
+      padding: 8px; font-size: 11px; color: #065f46; text-align: center; font-weight: 500;
+    }
+
+    /* SVG 连线与动画 */
+    #lines-svg {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      z-index: 5; pointer-events: none;
+    }
+    .flow-line {
+      fill: none; 
+      stroke-width: 2.5; 
+      stroke-linecap: round; 
+      stroke-linejoin: round;
+      stroke-dasharray: 8 6; /* 虚线效果 */
+      animation: dash-flow 2s linear infinite; /* 流动动画 */
+    }
+    @keyframes dash-flow {
+      to { stroke-dashoffset: -28; }
+    }
+    
+    /* 标签胶囊 - 绝对定位布局 */
+    .label {
+      position: absolute; z-index: 15;
+      background: white; padding: 5px 12px;
+      border-radius: 20px; font-size: 12px; font-weight: 600;
+      box-shadow: 0 3px 8px rgba(0,0,0,0.08);
+      border: 1px solid #e2e8f0;
+      white-space: nowrap;
+      transform: translate(-50%, -50%); /* 以坐标点为中心居中 */
+    }
+    .label.in { color: var(--flow-in); border-color: #bfdbfe; }
+    .label.out { color: var(--flow-out); border-color: #a7f3d0; }
+
+    /* 表格样式 */
+    table {
+      width: 100%; border-collapse: collapse; margin-bottom: 20px;
+      background: white; border-radius: 8px; overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+    th, td { padding: 14px; text-align: left; border-bottom: 1px solid var(--border-color); }
+    th { background: #f8fafc; font-weight: 600; color: #334155; }
+    td:first-child { font-weight: 600; color: #0f172a; width: 25%;}
+    
+    .tech-stack {
+      display: inline-block; padding: 2px 8px; background: #e2e8f0;
+      border-radius: 4px; font-size: 12px; font-weight: bold; font-family: monospace;
+    }
+    
+    /* 交互式步骤说明 */
+    .step-box {
+      background: #f8fafc; border-left: 4px solid var(--primary);
+      padding: 16px; margin-bottom: 12px; border-radius: 0 8px 8px 0;
+      cursor: pointer; transition: background 0.2s;
+    }
+    .step-box:hover { background: #e0e7ff; }
+    .step-box strong { color: var(--primary); }
+    .step-box.green-theme { border-left-color: var(--flow-out); }
+    .step-box.green-theme:hover { background: #d1fae5; }
+    .step-box.green-theme strong { color: var(--flow-out); }
+  </style>
+</head>
+<body>
+
+  <div class="report-container">
+    <header>
+      <h1>千万级代码库异步扫描架构分析报告</h1>
+      <div class="meta-info">
+        <span>架构范式: 跨语言异构微服务 (Rust + Python + Redis)</span> | 
+        <span>协议标准: Celery Protocol v2/v5</span>
+      </div>
+    </header>
+
+    <section id="executive-summary">
+      <h2>1. 架构范式与核心价值</h2>
+      <p>本架构采用 <strong>"Rust (网关/调度) + Redis (总线/状态) + Python (业务逻辑/AI算力)"</strong> 的异构组合，完美解决了单一语言在大型工程中的瓶颈：</p>
+      <ul>
+        <li><strong>Rust 端 (code-inspector-main)</strong>：承担极高吞吐量的代码库接入、AST初步扫描与任务拆分。其内存安全与低开销确保调度层面对海量并发时不产生OOM或GC停顿。</li>
+        <li><strong>Python 端 (code-context-service)</strong>：专注于安全编译选项扫描（<code>secure_compilation_ops_scan</code>）及基于大模型的上下文解析。利用Python丰富的AI生态降低业务逻辑迭代成本。</li>
+        <li><strong>物理隔离与解耦</strong>：通过 Celery 协议约定，将 Broker（消息分发，DB 6）与 Backend（结果存储，DB 7）物理分离。两端服务互不阻塞，单点宕机不影响整体接入层。</li>
+      </ul>
+    </section>
+
+    <section id="architecture-diagram">
+      <h2>2. 系统拓扑与数据流转视图</h2>
+      <p>下图展示了整个异步流转的闭环过程。蓝线表示任务下发流向，绿线表示结果回收流向。</p>
+      
+      <div class="diagram-wrapper">
+        <div class="canvas">
+          <!-- Rust 节点 -->
+          <div class="node" id="node-rust">
+            <span class="node-title">code-inspector-main</span>
+            <span class="node-sub">Rust Service (Producer)</span>
+          </div>
+
+          <!-- Redis 中间件 -->
+          <div class="node" id="node-redis">
+            <div class="redis-header">Redis Middleware</div>
+            <div class="redis-block">
+              <div class="block-label">任务队列 (DB 6 - LIST)</div>
+              <div class="q-bar"></div><div class="q-bar"></div>
+              <div class="q-bar"></div><div class="q-bar"></div>
+              <div style="text-align:center;font-size:10px;color:#3b82f6;margin-top:4px;">→ 消费调度中</div>
+            </div>
+            <div class="redis-block" style="flex:1;">
+              <div class="block-label">结果存储 (DB 7 - HASH)</div>
+              <div class="result-card">
+                <span style="color:#10b981;font-weight:bold;">[Result_ID: 8821]</span><br>
+                上下文解析完成
+              </div>
+            </div>
+          </div>
+
+          <!-- Python 节点 -->
+          <div class="node" id="node-python">
+            <span class="node-title">code-context-service</span>
+            <span class="node-sub">Python Worker (Consumer)</span>
+          </div>
+
+          <!-- 动态数据流连线 -->
+          <svg id="lines-svg">
+            <defs>
+              <marker id="arrow-in" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#3b82f6" />
+              </marker>
+              <marker id="arrow-out" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#10b981" />
+              </marker>
+            </defs>
+            
+            <!-- 修复后的对称闭环水平穿透流向 -->
+            
+            <!-- L1: Rust (右侧面上部) -> Redis (左侧面上部) -->
+            <!-- 解释：起点X=260(Rust右边界)，折线中点X=330，终点X=400(Redis左边界) -->
+            <path class="flow-line" d="M 260 210 L 330 210 L 330 150 L 400 150" stroke="#3b82f6" marker-end="url(#arrow-in)" />
+            
+            <!-- L2: Redis (右侧面上部) -> Python (左侧面上部) -->
+            <!-- 解释：起点X=580(Redis右边界)，折线中点X=640，终点X=700(Python左边界) -->
+            <path class="flow-line" d="M 580 150 L 640 150 L 640 210 L 700 210" stroke="#3b82f6" marker-end="url(#arrow-in)" />
+            
+            <!-- L3: Python (左侧面下部) -> Redis (右侧面下部) -->
+            <!-- 解释：起点X=700(Python左边界)，折线中点X=640，终点X=580(Redis右边界) -->
+            <path class="flow-line" d="M 700 310 L 640 310 L 640 370 L 580 370" stroke="#10b981" marker-end="url(#arrow-out)" />
+            
+            <!-- L4: Redis (左侧面下部) -> Rust (右侧面下部) -->
+            <!-- 解释：起点X=400(Redis左边界)，折线中点X=330，终点X=260(Rust右边界) -->
+            <path class="flow-line" d="M 400 370 L 330 370 L 330 310 L 260 310" stroke="#10b981" marker-end="url(#arrow-out)" />
+          </svg>
+
+          <!-- 静态标签 - 精确覆盖在折线外侧拐角附近，绝不重叠 -->
+          <div class="label in" style="left: 330px; top: 120px;">写入 Issue (Push)</div>
+          <div class="label in" style="left: 640px; top: 120px;">消费任务 (Pop)</div>
+          <div class="label out" style="left: 640px; top: 400px;">存入结果 (Set)</div>
+          <div class="label out" style="left: 330px; top: 400px;">获取结果 (Get/Sub)</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="component-selection">
+      <h2>3. 开源组件选型基准</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>模块职责</th>
+            <th>推荐 GitHub 仓库</th>
+            <th>选型依据与落地建议</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Rust 协议封装<br><span class="tech-stack">Producer</span></td>
+            <td><strong>cool-japan/celers</strong><br><em>(备选: GaiaNet-AI/celery-rs)</em></td>
+            <td>主打企业级生产可用，100%兼容Celery v2协议。提供宏支持（<code>#[celers::task]</code>），可极简定义与Python一致的API约束签名。</td>
+          </tr>
+          <tr>
+            <td>Rust 异步轮询<br><span class="tech-stack">Poller</span></td>
+            <td><strong>redis-rs/redis-rs</strong></td>
+            <td>配合 Tokio 异步运行时，绕过 Celery 库自身反序列化限制，直接连接 DB 7 获取 <code>celery-task-meta-&lt;id&gt;</code> 键值，对 JSON 解析完全可控。</td>
+          </tr>
+          <tr>
+            <td>Python 任务引擎<br><span class="tech-stack">Consumer</span></td>
+            <td><strong>celery/celery</strong><br>+ <strong>kombu</strong></td>
+            <td>业界标准。核心约束：需在配置中显式声明 <code>broker_url</code> (DB 6) 与 <code>result_backend</code> (DB 7)。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="data-flow">
+      <h2>4. API 约束闭环与执行时序</h2>
+      <p>按照架构图流向，跨语言交互需严格遵守以下接口契约：</p>
+      
+      <div class="step-box">
+        <strong>第一步 (L1)：Rust 写入队列</strong><br>
+        Rust 端将任务序列化为标准 Celery JSON 格式，<code>LPUSH</code> 进入 Redis DB 6。<strong>约束条件</strong>：任务名称必须与 Python 端的 <code>name="secure compilation options scan"</code> 完全一致，且忽略 Python 端的 <code>self</code> 参数绑定。
+      </div>
+      
+      <div class="step-box">
+        <strong>第二步 (L2)：Python 阻塞消费</strong><br>
+        Python Celery Worker 采用 <code>BRPOP</code> 监听 DB 6。读取到 payload 后，自动路由至本地对应函数 <code>secure_compilation_ops_scan_work</code> 并执行扫描逻辑。
+      </div>
+
+      <div class="step-box green-theme">
+        <strong>第三步 (L3)：Python 回写状态</strong><br>
+        任务结束时返回 Dict 数据（如 <code>{"status": "ok"}</code>），Celery 框架拦截返回值，将其自动包装为包含状态码的 JSON，并存入 Redis DB 7。
+      </div>
+
+      <div class="step-box green-theme">
+        <strong>第四步 (L4)：Rust 异步提取</strong><br>
+        Rust 轮询协程连接 DB 7 查询 <code>celery-task-meta-&lt;task_id&gt;</code>。一旦检测到状态为 <code>SUCCESS</code>，即提取真实数据，完成流水线的最终闭环。
+      </div>
+    </section>
+
+    <section id="fault-tolerance">
+      <h2>5. 生产环境高可用建议</h2>
+      <ul>
+        <li><strong>Worker 防丢机制：</strong>在 Python 端启动 <code>acks_late=True</code>。若 Worker 节点在计算上下文时遭遇 OOM 被系统强制关闭，任务消息将自动退回 DB 6，由其他节点重新消费。</li>
+        <li><strong>轮询性能优化：</strong>建议摒弃 Rust 侧高频轮询 DB 7（GET操作）。通过开启 Redis 的 <strong>Keyspace Notifications</strong>（键空间通知），Rust 可通过 Pub/Sub 模型订阅 DB 7 的更新事件，将毫秒级延迟与零无效网络IO完美结合。</li>
+      </ul>
+    </section>
+  </div>
+</body>
+</html>
