@@ -4,8 +4,15 @@ use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let producer = Producer::new("redis://127.0.0.1:6379/6")?;
-    let listener = ResultListener::new("redis://127.0.0.1:6379/7").await?;
+    dotenvy::dotenv().ok();
+
+    let broker_url = std::env::var("REDIS_BROKER_URL")
+        .unwrap_or_else(|_| "redis://127.0.0.1:6379/6".to_string());
+    let backend_url = std::env::var("REDIS_BACKEND_URL")
+        .unwrap_or_else(|_| "redis://127.0.0.1:6379/7".to_string());
+
+    let producer = Producer::new(&broker_url)?;
+    let listener = ResultListener::new(&backend_url).await?;
 
     let args = json!([
         "/path/to/repo",

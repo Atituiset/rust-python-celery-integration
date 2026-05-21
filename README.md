@@ -31,13 +31,14 @@
 ## 项目结构
 
 ```
+├── .env                        # Redis 连接配置 (broker / backend URL)
 ├── docker-compose.yml          # Redis 服务编排
 ├── docs/
 │   └── arch-report.html        # 原始架构分析报告（只读）
 ├── python-worker/
 │   ├── .venv/                  # uv 虚拟环境
-│   ├── requirements.txt        # celery[redis], redis
-│   ├── celeryconfig.py         # broker_url=DB6, result_backend=DB7
+│   ├── requirements.txt        # celery[redis], redis, python-dotenv
+│   ├── celeryconfig.py         # 从 .env 读取 broker_url / result_backend
 │   └── tasks.py                # @task(name="scan.task")
 ├── rust-celery-producer/       # 可复用 Rust Crate（零第三方 Celery 依赖）
 │   ├── Cargo.toml              # celery-redis-producer v0.1.0
@@ -51,6 +52,18 @@
 │   └── src/main.rs             # 示例: 推送任务并等待结果
 └── README.md                   # 本文件
 ```
+
+## 配置
+
+Redis 连接地址通过项目根目录的 `.env` 文件管理，Rust 和 Python 两侧共享同一配置：
+
+```bash
+# .env
+REDIS_BROKER_URL=redis://localhost:6379/6    # Celery broker (任务队列)
+REDIS_BACKEND_URL=redis://localhost:6379/7   # Celery backend (结果存储)
+```
+
+两侧代码均优先读取环境变量，若未设置则回退到上述默认值。
 
 ## 快速开始
 
@@ -82,7 +95,7 @@ Worker 启动后应显示：
 [tasks]
   . scan.task
 
-Connected to redis://localhost:6379/6
+Connected to redis://localhost:6379/6   # 实际 URL 以 .env 配置为准
 ```
 
 ### 3. 运行 Rust Producer
@@ -197,8 +210,13 @@ use celery_redis_producer::{Producer, ResultListener};
 use serde_json::json;
 
 async fn example() -> anyhow::Result<()> {
-    let producer = Producer::new("redis://localhost:6379/6")?;
-    let listener = ResultListener::new("redis://localhost:6379/7").await?;
+    let broker_url = std::env::var("REDIS_BROKER_URL")
+        .unwrap_or_else(|_| "redis://localhost:6379/6".to_string());
+    let backend_url = std::env::var("REDIS_BACKEND_URL")
+        .unwrap_or_else(|_| "redis://localhost:6379/7".to_string());
+
+    let producer = Producer::new(&broker_url)?;
+    let listener = ResultListener::new(&backend_url).await?;
 
     let args = json!(["/repo", ["file.c"]]);
     let task_id = producer.enqueue("scan.task", args).await?;

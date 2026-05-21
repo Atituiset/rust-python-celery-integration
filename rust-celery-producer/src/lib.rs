@@ -11,11 +11,17 @@
 //! use std::time::Duration;
 //!
 //! # async fn example() -> anyhow::Result<()> {
-//! let producer = Producer::new("redis://localhost:6379/6").await?;
+//! // Load from .env or environment variables
+//! let broker_url = std::env::var("REDIS_BROKER_URL")
+//!     .unwrap_or_else(|_| "redis://localhost:6379/6".to_string());
+//! let backend_url = std::env::var("REDIS_BACKEND_URL")
+//!     .unwrap_or_else(|_| "redis://localhost:6379/7".to_string());
+//!
+//! let producer = Producer::new(&broker_url)?;
 //! let args = json!(["/repo", ["file.c"]]);
 //! let task_id = producer.enqueue("scan.task", args).await?;
 //!
-//! let listener = ResultListener::new("redis://localhost:6379/7").await?;
+//! let listener = ResultListener::new(&backend_url).await?;
 //! let result = listener.wait(&task_id, Duration::from_secs(30)).await?;
 //! # Ok(())
 //! # }

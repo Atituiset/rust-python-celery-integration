@@ -33,6 +33,15 @@ impl CeleryResult {
 
 type TaskRegistry = Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>;
 
+/// Extract the database number from a Redis URL (`redis://host:port/db`).
+fn parse_db_from_url(redis_url: &str) -> i64 {
+    redis_url
+        .rsplit('/')
+        .next()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
+}
+
 /// Global result listener backed by a single Redis Pub/Sub connection.
 ///
 /// Subscribes to `__keyevent@<db>__:set` and wakes up waiting task
@@ -41,6 +50,7 @@ type TaskRegistry = Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>;
 pub struct ResultListener {
     registry: TaskRegistry,
     client: redis::Client,
+    db: i64,
 }
 
 impl ResultListener {
@@ -51,6 +61,7 @@ impl ResultListener {
     pub async fn new(redis_url: &str) -> Result<Self> {
         let client = redis::Client::open(redis_url)
             .context("Failed to create Redis client")?;
+        let db = parse_db_from_url(redis_url);
 
         let registry: TaskRegistry = Arc::new(Mutex::new(HashMap::new()));
         let registry_clone = registry.clone();
@@ -65,7 +76,8 @@ impl ResultListener {
                 }
             };
 
-            if let Err(e) = pubsub.subscribe("__keyevent@7__:set").await {
+            let channel = format!("__keyevent@{}__:set", db);
+            if let Err(e) = pubsub.subscribe(&channel).await {
                 eprintln!("[celery-redis-producer] Subscribe failed: {}", e);
                 return;
             }
@@ -86,7 +98,7 @@ impl ResultListener {
             }
         });
 
-        Ok(Self { registry, client })
+        Ok(Self { registry, client, db })
     }
 
     /// Wait for a task result with double-checked locking.
@@ -105,10 +117,10 @@ impl ResultListener {
             .context("Failed to connect to Redis")?;
 
         redis::cmd("SELECT")
-            .arg(7)
+            .arg(self.db)
             .query_async::<_, ()>(&mut conn)
             .await
-            .context("SELECT DB 7 failed")?;
+            .context("SELECT DB failed")?;
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
 

@@ -1,9 +1,12 @@
-# Celery configuration
-# DB 6: broker (task queue)
-# DB 7: result backend
+import os
+from dotenv import load_dotenv
 
-broker_url = "redis://localhost:6379/6"
-result_backend = "redis://localhost:6379/7"
+# Load environment variables from project root .env
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+
+# Celery configuration
+broker_url = os.getenv("REDIS_BROKER_URL", "redis://localhost:6379/6")
+result_backend = os.getenv("REDIS_BACKEND_URL", "redis://localhost:6379/7")
 
 task_serializer = "json"
 accept_content = ["json"]

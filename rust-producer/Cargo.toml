@@ -8,3 +8,4 @@ tokio = { version = "1", features = ["full"] }
 celery-redis-producer = { path = "../rust-celery-producer" }
 serde_json = "1.0"
 anyhow = "1.0"
+dotenvy = "0.15"
