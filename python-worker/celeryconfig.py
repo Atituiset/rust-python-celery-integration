@@ -1,4 +1,5 @@
 import os
+import platform
 from dotenv import load_dotenv
 
 # Load environment variables from project root .env
@@ -23,3 +24,15 @@ result_expires = 3600
 
 # Concurrency
 worker_concurrency = 2
+
+# Windows 兼容: prefork 进程池依赖 Unix fork(), Windows 不支持
+# 自动降级为 threads 或 solo
+if platform.system() == "Windows":
+    # 使用线程池代替进程池, 避免 billiard PermissionError
+    worker_pool = "threads"
+
+    # 可选: 如果 threads 也有问题, 用 solo(单进程, 无并发)
+    # worker_pool = "solo"
+
+    # 消除 billiard 的 fork 警告
+    os.environ.setdefault("FORKED_BY_MULTIPROCESSING", "1")

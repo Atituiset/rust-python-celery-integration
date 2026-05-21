@@ -359,7 +359,21 @@ redis-cli CONFIG SET notify-keyspace-events KEA
 cargo clean && cargo build
 ```
 
-### 4. Python 依赖冲突
+### 4. Windows 上 Celery Worker 报 `PermissionError: [WinError 5]`
+
+**原因**：Celery 默认使用 `prefork` 进程池（基于 `billiard`），依赖 Unix `fork()` 系统调用，Windows 不支持。
+
+**解决**：`celeryconfig.py` 已自动检测 Windows 并降级为 `threads` 线程池，无需手动修改。如果仍有问题，启动时显式指定：
+
+```bash
+# Windows 原生
+.venv\Scripts\celery -A tasks worker --loglevel=info -P threads
+
+# 或单进程模式（最稳定，无并发）
+.venv\Scripts\celery -A tasks worker --loglevel=info -P solo
+```
+
+### 5. Python 依赖冲突
 
 ```bash
 cd python-worker

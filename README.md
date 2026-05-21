@@ -86,8 +86,11 @@ cd python-worker
 uv venv
 uv pip install -r requirements.txt
 
-# 启动 Worker
+# Linux / macOS / WSL
 .venv/bin/celery -A tasks worker --loglevel=info
+
+# Windows (原生)
+.venv\Scripts\celery -A tasks worker --loglevel=info
 ```
 
 Worker 启动后应显示：
