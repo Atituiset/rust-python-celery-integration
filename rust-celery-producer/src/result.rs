@@ -178,3 +178,75 @@ impl ResultListener {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_db_from_url_with_db() {
+        assert_eq!(parse_db_from_url("redis://localhost:6379/7"), 7);
+        assert_eq!(parse_db_from_url("redis://localhost:6379/15"), 15);
+        assert_eq!(parse_db_from_url("redis://localhost:6379/0"), 0);
+    }
+
+    #[test]
+    fn test_parse_db_from_url_no_db() {
+        assert_eq!(parse_db_from_url("redis://localhost:6379"), 0);
+        assert_eq!(parse_db_from_url("redis://localhost:6379/"), 0);
+    }
+
+    #[test]
+    fn test_parse_db_from_url_with_auth() {
+        assert_eq!(
+            parse_db_from_url("redis://:password@localhost:6379/6"),
+            6
+        );
+    }
+
+    #[test]
+    fn test_celery_result_is_final() {
+        let success = CeleryResult {
+            status: "SUCCESS".to_string(),
+            result: serde_json::Value::Null,
+            traceback: None,
+            task_id: "t1".to_string(),
+            date_done: None,
+        };
+        assert!(success.is_final());
+
+        let failure = CeleryResult {
+            status: "FAILURE".to_string(),
+            result: serde_json::Value::Null,
+            traceback: Some("error".to_string()),
+            task_id: "t2".to_string(),
+            date_done: None,
+        };
+        assert!(failure.is_final());
+
+        let pending = CeleryResult {
+            status: "PENDING".to_string(),
+            result: serde_json::Value::Null,
+            traceback: None,
+            task_id: "t3".to_string(),
+            date_done: None,
+        };
+        assert!(!pending.is_final());
+    }
+
+    #[test]
+    fn test_celery_result_deserialization() {
+        let json_str = r#"{
+            "status": "SUCCESS",
+            "result": {"findings_count": 3},
+            "traceback": null,
+            "task_id": "abc-123",
+            "date_done": "2026-01-01T00:00:00Z"
+        }"#;
+
+        let result: CeleryResult = serde_json::from_str(json_str).unwrap();
+        assert_eq!(result.status, "SUCCESS");
+        assert_eq!(result.task_id, "abc-123");
+        assert!(result.traceback.is_none());
+    }
+}

@@ -59,3 +59,82 @@ pub struct DeliveryInfo {
     pub exchange: String,
     pub routing_key: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_celery_message_serialization() {
+        let msg = CeleryMessage {
+            body: "dGVzdA==".to_string(),
+            content_encoding: "utf-8".to_string(),
+            content_type: "application/json".to_string(),
+            headers: CeleryHeaders {
+                lang: "py".to_string(),
+                task: "scan.task".to_string(),
+                id: "test-id".to_string(),
+                root_id: "test-id".to_string(),
+                parent_id: None,
+                group: None,
+                meth: None,
+                shadow: None,
+                eta: None,
+                expires: None,
+                retries: 0,
+                timelimit: [None, None],
+                argsrepr: "[\"/repo\", [\"a.c\"]]".to_string(),
+                kwargsrepr: "{}".to_string(),
+                origin: "rust-producer".to_string(),
+            },
+            properties: CeleryProperties {
+                correlation_id: "test-id".to_string(),
+                reply_to: "reply-id".to_string(),
+                delivery_mode: 2,
+                delivery_info: DeliveryInfo {
+                    exchange: "".to_string(),
+                    routing_key: "celery".to_string(),
+                },
+                priority: 0,
+                body_encoding: "base64".to_string(),
+                delivery_tag: "tag-1".to_string(),
+            },
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+
+        // Verify all required fields are present
+        assert!(json.contains("content-encoding"), "missing content-encoding");
+        assert!(json.contains("content-type"), "missing content-type");
+        assert!(json.contains("correlation_id"), "missing correlation_id");
+        assert!(json.contains("delivery_tag"), "missing delivery_tag");
+        assert!(json.contains("routing_key\":\"celery\""), "missing routing_key");
+        assert!(json.contains("body_encoding"), "missing body_encoding");
+    }
+
+    #[test]
+    fn test_headers_defaults() {
+        let headers = CeleryHeaders {
+            lang: "py".to_string(),
+            task: "test.task".to_string(),
+            id: "uuid".to_string(),
+            root_id: "uuid".to_string(),
+            parent_id: None,
+            group: None,
+            meth: None,
+            shadow: None,
+            eta: None,
+            expires: None,
+            retries: 0,
+            timelimit: [None, None],
+            argsrepr: "[]".to_string(),
+            kwargsrepr: "{}".to_string(),
+            origin: "test".to_string(),
+        };
+
+        let json = serde_json::to_string(&headers).unwrap();
+        assert!(json.contains("\"lang\":\"py\""));
+        assert!(json.contains("\"task\":\"test.task\""));
+        assert!(json.contains("\"retries\":0"));
+    }
+}

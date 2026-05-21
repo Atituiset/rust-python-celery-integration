@@ -8,7 +8,6 @@
 //! ```no_run
 //! use celery_redis_producer::{Producer, ResultListener};
 //! use serde_json::json;
-//! use std::time::Duration;
 //!
 //! # async fn example() -> anyhow::Result<()> {
 //! // Load from .env or environment variables
@@ -22,7 +21,7 @@
 //! let task_id = producer.enqueue("scan.task", args).await?;
 //!
 //! let listener = ResultListener::new(&backend_url).await?;
-//! let result = listener.wait(&task_id, Duration::from_secs(30)).await?;
+//! let result = listener.wait(&task_id, 30).await?;
 //! # Ok(())
 //! # }
 //! ```

@@ -100,3 +100,26 @@ impl Producer {
         Ok(task_id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_producer_new_valid_url() {
+        let producer = Producer::new("redis://localhost:6379/6");
+        assert!(producer.is_ok(), "Should create producer with valid Redis URL");
+    }
+
+    #[test]
+    fn test_producer_new_invalid_url() {
+        let producer = Producer::new("not-a-valid-url");
+        assert!(producer.is_err(), "Should fail with invalid URL");
+    }
+
+    #[test]
+    fn test_producer_new_with_auth() {
+        let producer = Producer::new("redis://:mypassword@localhost:6379/6");
+        assert!(producer.is_ok(), "Should create producer with authenticated URL");
+    }
+}
